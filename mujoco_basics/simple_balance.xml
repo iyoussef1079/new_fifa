@@ -1,0 +1,65 @@
+<?xml version="1.0" ?>
+<!-- Simple MuJoCo Balance Model - Week 1
+     Inverted pendulum with muscle actuators (proper foundation)
+-->
+<mujoco model="simple_balance">
+  
+  <!-- Compiler settings -->
+  <compiler angle="radian" inertiafromgeom="true"/>
+  
+  <!-- Options for simulation -->
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+  
+  <!-- Default settings -->
+  <default>
+    <joint limited="true" damping="0.1"/>
+    <geom contype="1" conaffinity="1" friction="1 0.1 0.1"/>
+    <motor ctrlrange="-1 1" ctrllimited="true"/>
+  </default>
+  
+  <!-- Assets (materials, textures) -->
+  <asset>
+    <material name="ground" rgba="0.2 0.3 0.4 1"/>
+    <material name="body" rgba="0.8 0.6 0.4 1"/>
+    <material name="foot" rgba="0.1 0.1 0.1 1"/>
+  </asset>
+  
+  <!-- World body (everything attaches here) -->
+  <worldbody>
+    
+    <!-- Ground plane -->
+    <geom name="ground" type="plane" size="5 5 1" material="ground"/>
+    <light pos="0 0 3"/>
+    
+    <!-- Foot (fixed to ground - ankle joint connection) -->
+    <body name="foot" pos="0 0 0.05">
+      <geom name="foot_geom" type="box" size="0.1 0.05 0.02" material="foot"/>
+      
+      <!-- Body (inverted pendulum) -->  
+      <body name="body" pos="0 0 0.9">
+        <joint name="ankle" type="hinge" axis="0 1 0" range="-0.5 0.5" pos="0 0 -0.9" damping="2.0"/>
+        
+        <!-- Body mass/inertia -->
+        <geom name="body_geom" type="capsule" fromto="0 0 -0.8 0 0 0.1" size="0.1" material="body" mass="70"/>
+        
+      </body>
+    </body>
+    
+  </worldbody>
+  
+  <!-- Simple motor actuators (will upgrade to muscles later) -->
+  <actuator>
+    <!-- Plantarflexor motor (positive torque = forward lean) -->
+    <motor name="plantarflexor" 
+           joint="ankle"
+           gear="200"
+           ctrlrange="0 1"/>
+           
+    <!-- Dorsiflexor motor (negative torque = backward lean) -->  
+    <motor name="dorsiflexor"
+           joint="ankle"
+           gear="-150"
+           ctrlrange="0 1"/>
+  </actuator>
+  
+</mujoco>
