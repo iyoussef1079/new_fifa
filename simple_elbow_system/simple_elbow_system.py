@@ -14,14 +14,14 @@ import time
 class ElbowParams:
     """Simple parameters for our elbow system"""
     # Joint properties
-    joint_inertia: float = 0.1  # kg*m^2 (simplified)
-    joint_damping: float = 0.5  # N*m*s/rad
+    joint_inertia: float = 0.5    # kg*m^2 (increased for stability)
+    joint_damping: float = 2.0    # N*m*s/rad (more damping)
     
-    # Muscle properties
-    bicep_max_force: float = 600.0    # N
-    tricep_max_force: float = 800.0   # N  
+    # Muscle properties (reduced for realistic range)
+    bicep_max_force: float = 200.0    # N (reduced)
+    tricep_max_force: float = 250.0   # N (reduced) 
     bicep_moment_arm: float = 0.05    # m
-    tricep_moment_arm: float = 0.025  # m
+    tricep_moment_arm: float = 0.04  # m
     
     # Simulation
     dt: float = 0.01  # 100 Hz simulation
@@ -112,10 +112,10 @@ def test_basic_functionality():
     for step in range(200):  # 2 seconds at 100Hz
         if step < 100:
             # Activate bicep (should flex - positive angle)
-            angle = elbow.step(bicep_activation=0.3, tricep_activation=0.0)
+            angle = elbow.step(bicep_activation=0.5, tricep_activation=0.0)
         else:
             # Activate tricep (should extend - negative angle) 
-            angle = elbow.step(bicep_activation=0.0, tricep_activation=0.3)
+            angle = elbow.step(bicep_activation=0.0, tricep_activation=0.8)
         
         angles.append(angle)
         times.append(elbow.time)
@@ -152,7 +152,7 @@ def test_sine_tracking():
     errors = []
     
     # Simple proportional controller for testing
-    kp = 2.0  # Proportional gain
+    kp = 4.0  # Proportional gain
     
     for step in range(500):  # 5 seconds
         # Generate sine wave reference (amplitude 30 degrees, period 2 seconds)
