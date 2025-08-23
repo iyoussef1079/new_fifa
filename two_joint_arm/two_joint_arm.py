@@ -28,9 +28,9 @@ class TwoJointArmParams:
     shoulder_damping: float = 3.0   # N*m*s/rad (higher for stability)
     elbow_damping: float = 2.0      # N*m*s/rad (your working value)
     
-    # Muscle forces (start with your working elbow values)
-    shoulder_flexor_max_force: float = 300.0    # N (stronger than elbow)
-    shoulder_extensor_max_force: float = 350.0  # N
+    # Muscle forces (FIXED: stronger shoulder muscles to overcome gravity)
+    shoulder_flexor_max_force: float = 800.0    # N (much stronger to lift arm+forearm)
+    shoulder_extensor_max_force: float = 900.0  # N
     bicep_max_force: float = 200.0              # N (your working value)
     tricep_max_force: float = 250.0             # N (your working value)
     
