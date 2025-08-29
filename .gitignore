@@ -1,3 +1,3 @@
 .vscode
 */__pycache__/**
-*/models/*
+*/RL_agent_weight_after_train/*

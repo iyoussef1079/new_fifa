@@ -9,7 +9,7 @@ def view_fullbody_model():
     """
     
     # Path to the full body model XML
-    model_path = os.path.join('./myo_sim', 'body', 'myobody_full.xml')
+    model_path = os.path.join('./myo_sim', 'body', 'myobody.xml')
 
     # body: myobody.xml myobody_simpleupper.xml
     # arm: myoarm.xml

@@ -6,13 +6,13 @@ from balance_env import BalanceEnv
 from stable_baselines3 import SAC
 
 # --- Parameters ---
-model_dir = "models/"
+model_dir = "RL_agent_weight_after_train"
 # IMPORTANT: Change this to the specific model checkpoint you want to view
-model_to_load = "sac_balance_model_1950000_steps.zip" 
-model_path = os.path.join(model_dir, model_to_load)
+model_to_load = "sac_balance_model_interrupted.zip" 
+model_path = os.path.join(model_dir, 'leg_chain_torso_chain', model_to_load)
 
 # --- Load Environment and Model ---
-xml_path = os.path.join('./myo_sim', 'leg', 'myoLegs.xml')
+xml_path = os.path.join('./myo_sim', 'body', 'myobody.xml')
 # IMPORTANT: Set render_mode to "human" to see the visualization
 eval_env = BalanceEnv(model_path=xml_path, render_mode="human")
 

@@ -28,6 +28,14 @@ class BalanceEnv(gym.Env):
         self.pelvis_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'pelvis')
         self.foot_sensor_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, 'foot_sensor')
 
+        try:
+            self.r_foot_sensor_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, 'r_foot')
+            self.l_foot_sensor_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, 'l_foot') 
+        except:
+            print("Warning: Foot sensors not found, using contact-based CoP calculation")
+            self.r_foot_sensor_id = -1
+            self.l_foot_sensor_id = -1
+
         # --- Define Reward Weights ---
         self.reward_weight_pose = 2.0
         self.reward_weight_sway = -1.0
@@ -56,6 +64,8 @@ class BalanceEnv(gym.Env):
         
         print(f"BalanceEnv initialized. Observation space size: {observation_size}, Action space size: {self.model.nu}")
 
+        self.core_muscles, self.all_muscle_names = self._identify_all_muscles()
+
     def _get_obs(self):
         """
         Constructs the observation vector from the simulation state.
@@ -71,11 +81,102 @@ class BalanceEnv(gym.Env):
 
         # Concatenate all parts into a single observation vector
         return np.concatenate([qpos, qvel, foot_force])
+    
+    def _calculate_cop_com(self):
+        """Calculate Center of Pressure from contacts and Center of Mass"""
+        
+        # Center of Pressure from ground contacts
+        total_force = 0
+        weighted_position = np.zeros(2)
+        
+        for i in range(self.data.ncon):
+            contact = self.data.contact[i]
+            contact_pos = contact.pos
+            
+            # Check if contact is with ground (low z-position)
+            if contact_pos[2] < 0.15:  # Ground level threshold
+                # Get contact force
+                force_6d = np.zeros(6)
+                mujoco.mj_contactForce(self.model, self.data, i, force_6d)
+                normal_force = abs(force_6d[2])  # Z-component
+                
+                if normal_force > 0.5:  # Force threshold  
+                    total_force += normal_force
+                    weighted_position += contact_pos[:2] * normal_force
+        
+        if total_force > 0:
+            cop = weighted_position / total_force
+        else:
+            # Default to pelvis projection if no contacts
+            pelvis_pos = self.data.xpos[self.pelvis_body_id]
+            cop = pelvis_pos[:2]
+        
+        # Center of Mass (simplified - pelvis projection)
+        pelvis_pos = self.data.xpos[self.pelvis_body_id]
+        com = pelvis_pos[:2]
+        
+        return cop, com
+    
+    def _compute_full_foot_contact_reward(self):
+        """
+        Reward full foot contact (heel + midfoot + forefoot)
+        Penalize toe-only balancing
+        """
+        
+        # Get all foot sensor values using the IDs from your debug output
+        r_heel = self.data.sensordata[0]      # r_heel
+        r_foot = self.data.sensordata[1]      # r_foot  
+        r_forefoot = self.data.sensordata[2]  # r_forefoot
+        r_toes = self.data.sensordata[3]      # r_toes
+        
+        l_heel = self.data.sensordata[4]      # l_heel
+        l_foot = self.data.sensordata[5]      # l_foot
+        l_forefoot = self.data.sensordata[6]  # l_forefoot
+        l_toes = self.data.sensordata[7]      # l_toes
+        
+        contact_threshold = 1.0  # Based on your sensor values showing 13-188
+        
+        # Count active regions for each foot
+        r_heel_contact = r_heel > contact_threshold
+        r_mid_contact = r_foot > contact_threshold
+        r_fore_contact = r_forefoot > contact_threshold
+        r_toes_contact = r_toes > contact_threshold
+        
+        l_heel_contact = l_heel > contact_threshold
+        l_mid_contact = l_foot > contact_threshold  
+        l_fore_contact = l_forefoot > contact_threshold
+        l_toes_contact = l_toes > contact_threshold
+        
+        # Reward full foot contact, penalize toe-only
+        r_foot_score = 0
+        l_foot_score = 0
+        
+        # Right foot scoring
+        if r_heel_contact and r_mid_contact and r_fore_contact:
+            r_foot_score = 1.0  # Perfect full foot contact
+        elif (r_heel_contact or r_mid_contact) and not r_toes_contact:
+            r_foot_score = 0.7  # Good heel/mid contact, no toes
+        elif r_toes_contact and not (r_heel_contact or r_mid_contact):
+            r_foot_score = -0.5  # Bad: toe-only contact
+        else:
+            r_foot_score = 0.0
+        
+        # Left foot scoring (same logic)
+        if l_heel_contact and l_mid_contact and l_fore_contact:
+            l_foot_score = 1.0
+        elif (l_heel_contact or l_mid_contact) and not l_toes_contact:
+            l_foot_score = 0.7
+        elif l_toes_contact and not (l_heel_contact or l_mid_contact):
+            l_foot_score = -0.5
+        else:
+            l_foot_score = 0.0
+        
+        total_reward = (r_foot_score + l_foot_score) * 0.5
+        
+        return total_reward
 
     def _calculate_reward(self, action):
-        """
-        Calculates the multi-component reward for the current state and action.
-        """
+        # Existing rewards
         pelvis_orientation_matrix = self.data.xmat[self.pelvis_body_id].reshape(3, 3)
         up_vector = pelvis_orientation_matrix[:, 2]
         vertical_alignment = up_vector[1]
@@ -87,9 +188,19 @@ class BalanceEnv(gym.Env):
 
         effort_penalty = np.sum(np.square(action))
 
+        # CoP-CoM balance reward
+        cop, com = self._calculate_cop_com()
+        cop_com_distance = np.linalg.norm(cop - com)
+        balance_reward = np.exp(-5.0 * cop_com_distance)
+        
+        # NEW: Full foot contact reward
+        foot_contact_reward = self._compute_full_foot_contact_reward()
+        
         total_reward = (self.reward_weight_pose * pose_reward +
                         self.reward_weight_sway * sway_penalty +
                         self.reward_weight_effort * effort_penalty +
+                        0.5 * balance_reward +
+                        2 * foot_contact_reward +  # NEW component
                         self.alive_bonus)
         
         return total_reward
@@ -100,6 +211,112 @@ class BalanceEnv(gym.Env):
         """
         pelvis_height = self.data.xpos[self.pelvis_body_id, 2]
         return pelvis_height < 0.7
+    
+    def _debug_foot_geometry(self):
+        """Debug ALL contacts, sensors, AND ground setup"""
+        print(f"\n--- MODEL POSITION DEBUG ---")
+        
+        # Check pelvis height (root body position)
+        pelvis_pos = self.data.qpos[:3]  # First 3 are usually root position
+        print(f"Pelvis position: {pelvis_pos}")
+        print(f"Pelvis height (z): {pelvis_pos[2]:.4f}")
+        
+        # Check if there's a ground plane
+        print(f"\nTotal geoms in model: {self.model.ngeom}")
+        for i in range(min(5, self.model.ngeom)):  # Check first 5 geoms
+            geom_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, i)
+            geom_type = self.model.geom_type[i]
+            geom_pos = self.model.geom_pos[i]
+            print(f"  Geom {i}: '{geom_name}', type={geom_type}, pos={geom_pos}")
+        
+        print(f"\n--- CONTACTS DEBUG ---")
+        print(f"Total contacts: {self.data.ncon}")
+        
+        if self.data.ncon == 0:
+            print("ERROR: No contacts detected!")
+            
+            # Check foot positions
+            try:
+                r_foot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'calcn_r')
+                l_foot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'calcn_l')
+                
+                r_foot_pos = self.data.xpos[r_foot_body_id]
+                l_foot_pos = self.data.xpos[l_foot_body_id]
+                
+                print(f"Right foot position: {r_foot_pos}")
+                print(f"Left foot position: {l_foot_pos}")
+                print(f"Right foot height: {r_foot_pos[2]:.4f}")
+                print(f"Left foot height: {l_foot_pos[2]:.4f}")
+                
+            except Exception as e:
+                print(f"Could not get foot positions: {e}")
+        
+        # Rest of your existing sensor code...
+        print(f"\n--- FOOT SENSORS DEBUG ---")
+        foot_sensors = ['r_heel', 'r_foot', 'r_forefoot', 'r_toes',
+                        'l_heel', 'l_foot', 'l_forefoot', 'l_toes']
+        
+        for sensor_name in foot_sensors:
+            try:
+                sensor_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_name)
+                sensor_value = self.data.sensordata[sensor_id]
+                contact_status = "CONTACT" if sensor_value > 0.01 else "no contact"
+                print(f"  {sensor_name}: Value={sensor_value:.4f} ({contact_status})")
+            except Exception as e:
+                print(f"  {sensor_name}: ERROR - {e}")
+        
+        print("--- END DEBUG ---\n")
+
+    def _identify_all_muscles(self):
+        """List ALL muscles in the model to see what's actually available"""
+        
+        print(f"\n--- ALL MUSCLES IN MODEL ---")
+        print(f"Total actuators: {self.model.nu}")
+        
+        all_muscles = []
+        trunk_muscles = []
+        leg_muscles = []
+        other_muscles = []
+        
+        for i in range(self.model.nu):
+            try:
+                actuator_name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
+                if actuator_name:
+                    name = actuator_name.decode() if isinstance(actuator_name, bytes) else actuator_name
+                    all_muscles.append(name)
+                    
+                    # Categorize by body region
+                    if any(pattern in name.lower() for pattern in 
+                        ['erector', 'obliq', 'rectus', 'transverse', 'psoas', 'iliacus', 
+                            'longissimus', 'multifidus', 'spinalis', 'quad_lumb', 'latissimus']):
+                        trunk_muscles.append(name)
+                    elif any(pattern in name.lower() for pattern in 
+                            ['quad', 'ham', 'gas', 'soleus', 'tibialis', 'glut', 'hip', 
+                            'vastus', 'rectus_fem', 'biceps_fem', 'semiten', 'semimem']):
+                        leg_muscles.append(name)
+                    else:
+                        other_muscles.append(name)
+                        
+            except:
+                name = f"actuator_{i}"
+                all_muscles.append(name)
+                other_muscles.append(name)
+        
+        print(f"\nTRUNK/CORE MUSCLES ({len(trunk_muscles)}):")
+        for i, muscle in enumerate(trunk_muscles):
+            print(f"  {i:3d}: {muscle}")
+        
+        print(f"\nLEG MUSCLES ({len(leg_muscles)}):")
+        for i, muscle in enumerate(leg_muscles):
+            print(f"  {i:3d}: {muscle}")
+        
+        print(f"\nOTHER MUSCLES ({len(other_muscles)}):")
+        for i, muscle in enumerate(other_muscles):
+            print(f"  {i:3d}: {muscle}")
+        
+        print(f"--- END ALL MUSCLES ---\n")
+        
+        return all_muscles, trunk_muscles, leg_muscles, other_muscles
 
     def reset(self, seed=None, options=None):
         """
@@ -125,6 +342,8 @@ class BalanceEnv(gym.Env):
 
         if self.render_mode == "human":
             self.render()
+        
+        # self._debug_foot_geometry()
             
         return observation, info
 

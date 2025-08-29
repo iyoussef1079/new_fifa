@@ -8,14 +8,14 @@ from stable_baselines3.common.callbacks import CheckpointCallback
 # --- Setup Directories ---
 # It's good practice to have separate directories for models and logs
 log_dir = "logs/"
-model_dir = "models/"
+model_dir = "leg_chain_torso_chain"
 os.makedirs(log_dir, exist_ok=True)
 os.makedirs(model_dir, exist_ok=True)
 
 # --- Step 1: Initialize the Custom Environment ---
-model_path = os.path.join('./myo_sim', 'leg', 'myoLegs.xml')
+model_path = os.path.join('./myo_sim', 'body', 'myobody.xml')
 # Set render_mode to None for fast training
-env = BalanceEnv(model_path=model_path, render_mode=None) 
+env = BalanceEnv(model_path=model_path, render_mode="human") 
 
 # --- Step 2: Setup Checkpoint Callback ---
 # This will save the model every 50,000 steps
@@ -30,7 +30,7 @@ checkpoint_callback = CheckpointCallback(
 
 # --- Step 3: Initialize or Load the Agent ---
 # Path to the latest model checkpoint
-latest_model_path = os.path.join(model_dir, "sac_balance_model_2000000_steps.zip") # Example path
+latest_model_path = os.path.join(model_dir, "sac_balance_model_interrupted.zip") # Example path
 
 if os.path.exists(latest_model_path):
     print(f"--- Loading existing model from {latest_model_path} ---")
