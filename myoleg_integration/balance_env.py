@@ -64,7 +64,7 @@ class BalanceEnv(gym.Env):
         
         print(f"BalanceEnv initialized. Observation space size: {observation_size}, Action space size: {self.model.nu}")
 
-        self.core_muscles, self.all_muscle_names = self._identify_all_muscles()
+        self.all_muscles, self.trunk_muscles, self.leg_muscles, self.other_muscles = self._identify_all_muscles()
 
     def _get_obs(self):
         """
@@ -174,6 +174,70 @@ class BalanceEnv(gym.Env):
         total_reward = (r_foot_score + l_foot_score) * 0.5
         
         return total_reward
+    
+    def _compute_core_tonic_reward(self, action):
+        """
+        Reward tonic activation in key postural stabilizers only
+        Focus on muscles that maintain spinal stability and prevent 'floppy' posture
+        """
+        
+        # Key postural muscles that should maintain baseline activation
+        key_stabilizers = {
+            # Major abdominals
+            'rect_abd_r': 0.10,    # 8% baseline - main abs
+            'rect_abd_l': 0.10,    
+            
+            # External obliques (just middle segments)
+            'EO3_r': 0.1,         # 6% baseline - mid trunk
+            'EO4_r': 0.1,         
+            'EO3_l': 0.1,
+            'EO4_l': 0.1,
+            
+            # Internal obliques (just middle segments)  
+            'IO3_r': 0.1,         # 5% baseline - deep stability
+            'IO4_r': 0.1,
+            'IO3_l': 0.1,
+            'IO4_l': 0.1,
+            
+            # Key multifidus (lumbar region - most important for posture)
+            'MF_m3s_r': 0.1,      # 7% baseline - L3 level
+            'MF_m4s_r': 0.1,      # L4 level  
+            'MF_m5s_r': 0.1,      # L5 level
+            'MF_m3s_l': 0.1,
+            'MF_m4s_l': 0.1, 
+            'MF_m5s_l': 0.1,
+            
+            # Hip flexors (already identified)
+            'iliacus_r': 0.08,     # 4% baseline
+            'psoas_r': 0.10,       # 6% baseline
+            'iliacus_l': 0.08,
+            'psoas_l': 0.10,
+        }
+        
+        total_reward = 0
+        muscle_count = 0
+        
+        for muscle_name, target_activation in key_stabilizers.items():
+            try:
+                muscle_idx = self.all_muscles.index(muscle_name)
+                current_activation = action[muscle_idx]
+                
+                # Gaussian reward around target (sigma = 0.03)
+                error = abs(current_activation - target_activation)
+                muscle_reward = np.exp(-(error / 0.03)**2)
+                
+                total_reward += muscle_reward
+                muscle_count += 1
+                
+            except ValueError:
+                # Muscle not found - skip
+                continue
+        
+        # Average reward across found muscles
+        if muscle_count > 0:
+            return total_reward / muscle_count
+        else:
+            return 0.0
 
     def _calculate_reward(self, action):
         # Existing rewards
@@ -193,14 +257,18 @@ class BalanceEnv(gym.Env):
         cop_com_distance = np.linalg.norm(cop - com)
         balance_reward = np.exp(-5.0 * cop_com_distance)
         
-        # NEW: Full foot contact reward
+        # Full foot contact reward
         foot_contact_reward = self._compute_full_foot_contact_reward()
+        
+        # NEW: Core tonic activation reward
+        core_tonic_reward = self._compute_core_tonic_reward(action)
         
         total_reward = (self.reward_weight_pose * pose_reward +
                         self.reward_weight_sway * sway_penalty +
                         self.reward_weight_effort * effort_penalty +
                         0.5 * balance_reward +
-                        2 * foot_contact_reward +  # NEW component
+                        0.6 * foot_contact_reward +      # Aggressive foot contact
+                        0.3 * core_tonic_reward +        # NEW: Core stability
                         self.alive_bonus)
         
         return total_reward
@@ -268,7 +336,7 @@ class BalanceEnv(gym.Env):
         print("--- END DEBUG ---\n")
 
     def _identify_all_muscles(self):
-        """List ALL muscles in the model to see what's actually available"""
+        """List ALL muscles in the model with better core muscle identification"""
         
         print(f"\n--- ALL MUSCLES IN MODEL ---")
         print(f"Total actuators: {self.model.nu}")
@@ -285,14 +353,23 @@ class BalanceEnv(gym.Env):
                     name = actuator_name.decode() if isinstance(actuator_name, bytes) else actuator_name
                     all_muscles.append(name)
                     
-                    # Categorize by body region
+                    # Enhanced categorization for trunk muscles
                     if any(pattern in name.lower() for pattern in 
-                        ['erector', 'obliq', 'rectus', 'transverse', 'psoas', 'iliacus', 
-                            'longissimus', 'multifidus', 'spinalis', 'quad_lumb', 'latissimus']):
+                        ['rect_abd',        # Rectus abdominis
+                            'eo1', 'eo2', 'eo3', 'eo4', 'eo5', 'eo6',  # External obliques
+                            'io1', 'io2', 'io3', 'io4', 'io5', 'io6',  # Internal obliques  
+                            'mf_',             # Multifidus
+                            'ql_',             # Quadratus lumborum
+                            'ps_',             # Psoas components
+                            'il_',             # Iliocostalis  
+                            'ltpt_', 'ltpl_',  # Longissimus
+                            'psoas', 'iliacus']):
                         trunk_muscles.append(name)
                     elif any(pattern in name.lower() for pattern in 
                             ['quad', 'ham', 'gas', 'soleus', 'tibialis', 'glut', 'hip', 
-                            'vastus', 'rectus_fem', 'biceps_fem', 'semiten', 'semimem']):
+                            'vastus', 'rectus_fem', 'biceps_fem', 'semiten', 'semimem',
+                            'bflh', 'bfsh', 'recfem', 'vasint', 'vaslat', 'vasmed',
+                            'glmax', 'glmed', 'glmin', 'add']):
                         leg_muscles.append(name)
                     else:
                         other_muscles.append(name)
@@ -306,17 +383,16 @@ class BalanceEnv(gym.Env):
         for i, muscle in enumerate(trunk_muscles):
             print(f"  {i:3d}: {muscle}")
         
-        print(f"\nLEG MUSCLES ({len(leg_muscles)}):")
-        for i, muscle in enumerate(leg_muscles):
+        print(f"\nLEG MUSCLES ({len(leg_muscles)}):")  
+        for i, muscle in enumerate(leg_muscles[:20]):  # Show first 20 only
             print(f"  {i:3d}: {muscle}")
+        if len(leg_muscles) > 20:
+            print(f"  ... and {len(leg_muscles)-20} more")
         
-        print(f"\nOTHER MUSCLES ({len(other_muscles)}):")
-        for i, muscle in enumerate(other_muscles):
-            print(f"  {i:3d}: {muscle}")
-        
-        print(f"--- END ALL MUSCLES ---\n")
+        print(f"--- END MUSCLE CATEGORIZATION ---\n")
         
         return all_muscles, trunk_muscles, leg_muscles, other_muscles
+
 
     def reset(self, seed=None, options=None):
         """
